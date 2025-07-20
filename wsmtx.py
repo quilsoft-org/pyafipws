@@ -10,8 +10,8 @@
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
 # for more details.
 
-"""Módulo para obtener código de autorización electrónico CAE/CAEA webservice 
-WSMTX de AFIP (Factura Electrónica Mercado Interno con codificación de 
+"""Módulo para obtener código de autorización electrónico CAE/CAEA webservice
+WSMTX de AFIP (Factura Electrónica Mercado Interno con codificación de
 productos) según RG2904 (opción A con detalle) y RG2926/10 (CAE anticipado).
 """
 from __future__ import print_function
@@ -196,7 +196,7 @@ class WSMTXCA(BaseWS):
         caea=None,
         fch_venc_cae=None,
         fecha_hs_gen=None,
-        cancela_misma_moneda_ext=None, 
+        cancela_misma_moneda_ext=None,
         condicion_iva_receptor_id=None,
         **kwargs
     ):
@@ -252,7 +252,7 @@ class WSMTXCA(BaseWS):
             "caea",
             "fch_venc_cae",
             "fecha_hs_gen",
-            "cancela_misma_moneda_ext", 
+            "cancela_misma_moneda_ext",
             "condicion_iva_receptor_id",
         ):
             self.factura[campo] = valor
@@ -1201,7 +1201,7 @@ class WSMTXCA(BaseWS):
                     "numeroDocumento": f["nro_doc"],
                     "numeroComprobante": f["cbt_desde"],
                     "numeroComprobante": f["cbt_hasta"],
-                    "fechaEmision": f["fecha_cbte"].isoformat(),
+                    "fechaEmision": f["fecha_cbte"],
                     "importeTotal": decimal.Decimal(str(f["imp_total"])),
                     "importeNoGravado": decimal.Decimal(str(f["imp_tot_conc"])),
                     "importeGravado": decimal.Decimal(str(f["imp_neto"])),
@@ -1210,9 +1210,9 @@ class WSMTXCA(BaseWS):
                     and decimal.Decimal(str(f["imp_trib"]))
                     or None,
                     "importeSubtotal": f["imp_subtotal"],
-                    "fechaServicioDesde": f.get("fecha_serv_desde").isoformat(),
-                    "fechaServicioHasta": f.get("fecha_serv_hasta").isoformat(),
-                    "fechaVencimientoPago": f.get("fecha_venc_pago").isoformat(),
+                    "fechaServicioDesde": f.get("fecha_serv_desde"),
+                    "fechaServicioHasta": f.get("fecha_serv_hasta"),
+                    "fechaVencimientoPago": f.get("fecha_venc_pago"),
                     "codigoMoneda": f["moneda_id"],
                     "cotizacionMoneda": str(decimal.Decimal(str(f["moneda_ctz"]))),
                     "cancelaEnMismaMonedaExtranjera": f.get("cancela_misma_moneda_ext"),
