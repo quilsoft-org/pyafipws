@@ -12,16 +12,16 @@
 
 """Módulo para Trazabilidad de Medicamentos ANMAT - PAMI - INSSJP Disp. 3683/11
 según Especificación Técnica para Pruebas de Servicios v2 (2013)"""
-from __future__ import print_function
-from __future__ import absolute_import
+# from __future__ import print_function
+# from __future__ import absolute_import
 
-# Información adicional y documentación:
-# http://www.sistemasagiles.com.ar/trac/wiki/TrazabilidadMedicamentos
+# # Información adicional y documentación:
+# # http://www.sistemasagiles.com.ar/trac/wiki/TrazabilidadMedicamentos
 
-from future import standard_library
+# from future import standard_library
 
-standard_library.install_aliases()
-from builtins import str
+# standard_library.install_aliases()
+# from builtins import str
 
 __author__ = "Mariano Reingart <reingart@gmail.com>"
 __copyright__ = "Copyright (C) 2011-2021 Mariano Reingart"
@@ -242,17 +242,17 @@ class TrazaMed(BaseWS):
         session = requests.Session()
         if cacert:
              session.verify = cacert
-        
+
         # simplified proxy handling for zeep
         if proxy:
              if isinstance(proxy, str):
                  session.proxies = {'http': proxy, 'https': proxy}
              elif isinstance(proxy, dict):
                  session.proxies = proxy
-        
+
         transport = Transport(session=session, timeout=timeout)
         wsse = UsernameToken(self.Username, self.Password)
-        
+
         # Creamos el cliente de Zeep
         self.client = Client(
             wsdl=wsdl,
@@ -260,14 +260,14 @@ class TrazaMed(BaseWS):
             wsse=wsse,
             plugins=[self.history]
         )
-        
+
         # Mantenemos compatibilidad con el decorador de utils.py
         self.client.xml_request = "" # Placeholder
         self.client.xml_response = "" # Placeholder
         # Usamos un proxy para que el decorador pueda acceder a xml_request y xml_response
         self._zeep_client = self.client # Guardamos el cliente real
         self.client = ZeepHistoryProxy(self.history)
-        
+
         return True
 
     @inicializar_y_capturar_excepciones
