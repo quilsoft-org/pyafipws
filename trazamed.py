@@ -12,16 +12,16 @@
 
 """Módulo para Trazabilidad de Medicamentos ANMAT - PAMI - INSSJP Disp. 3683/11
 según Especificación Técnica para Pruebas de Servicios v2 (2013)"""
-from __future__ import print_function
-from __future__ import absolute_import
+# from __future__ import print_function
+# from __future__ import absolute_import
 
-# Información adicional y documentación:
-# http://www.sistemasagiles.com.ar/trac/wiki/TrazabilidadMedicamentos
+# # Información adicional y documentación:
+# # http://www.sistemasagiles.com.ar/trac/wiki/TrazabilidadMedicamentos
 
-from future import standard_library
+# from future import standard_library
 
-standard_library.install_aliases()
-from builtins import str
+# standard_library.install_aliases()
+# from builtins import str
 
 __author__ = "Mariano Reingart <reingart@gmail.com>"
 __copyright__ = "Copyright (C) 2011-2021 Mariano Reingart"
@@ -33,10 +33,25 @@ import socket
 import sys
 import datetime, time
 import traceback
-import pysimplesoap.client
-from pysimplesoap.client import SoapClient, SoapFault, parse_proxy, set_http_wrapper
-from pysimplesoap.simplexml import SimpleXMLElement
+import requests
+import zeep
+from zeep import Client
+from zeep.transports import Transport
+from zeep.wsse.username import UsernameToken
+from zeep.plugins import HistoryPlugin
+from zeep.helpers import serialize_object
 from io import StringIO
+
+class ZeepHistoryProxy(object):
+    def __init__(self, history):
+        self.history = history
+        self.http = None
+    @property
+    def xml_request(self):
+        return self.history.last_sent["envelope"] if self.history.last_sent else ""
+    @property
+    def xml_response(self):
+        return self.history.last_received["envelope"] if self.history.last_received else ""
 
 # importo funciones compartidas:
 from pyafipws.utils import (
@@ -185,13 +200,14 @@ class TrazaMed(BaseWS):
     Version = "%s %s %s" % (
         __version__,
         HOMO and "Homologación" or "",
-        pysimplesoap.client.__version__,
+        zeep.__version__,
     )
 
     def __init__(self, reintentos=1):
         self.Username = self.Password = None
         self.TransaccionPlainWS = []
         BaseWS.__init__(self, reintentos)
+        self.history = HistoryPlugin()
 
     def inicializar(self):
         BaseWS.inicializar(self)
@@ -203,39 +219,56 @@ class TrazaMed(BaseWS):
 
     def __analizar_errores(self, ret):
         "Comprueba y extrae errores si existen en la respuesta XML"
-        self.errores = ret.get("errores", [])
-        self.Errores = [
-            "%s: %s" % (it["_c_error"], it["_d_error"]) for it in ret.get("errores", [])
-        ]
+        if not ret:
+            return
+        self.errores = ret.get("errores") or []
+        # Normalizar errores (pysimplesoap usaba guiones bajos)
+        self.Errores = []
+        for it in self.errores:
+            c_error = it.get("_c_error") or it.get("c_error")
+            d_error = it.get("_d_error") or it.get("d_error")
+            if c_error and d_error:
+                self.Errores.append("%s: %s" % (c_error, d_error))
         self.Resultado = ret.get("resultado")
 
     def Conectar(
         self, cache=None, wsdl=None, proxy="", wrapper=None, cacert=None, timeout=30
     ):
-        # Conecto usando el método estandard:
-        ok = BaseWS.Conectar(
-            self, cache, wsdl, proxy, wrapper, cacert, timeout, soap_server="jetty"
+        # Conecto usando zeep:
+        if HOMO or not wsdl:
+             wsdl = self.WSDL
+        self.wsdl = wsdl
+
+        session = requests.Session()
+        if cacert:
+             session.verify = cacert
+
+        # simplified proxy handling for zeep
+        if proxy:
+             if isinstance(proxy, str):
+                 session.proxies = {'http': proxy, 'https': proxy}
+             elif isinstance(proxy, dict):
+                 session.proxies = proxy
+
+        transport = Transport(session=session, timeout=timeout)
+        wsse = UsernameToken(self.Username, self.Password)
+
+        # Creamos el cliente de Zeep
+        self.client = Client(
+            wsdl=wsdl,
+            transport=transport,
+            wsse=wsse,
+            plugins=[self.history]
         )
 
-        if ok:
-            # si el archivo es local, asumo que ya esta corregido:
-            if not self.wsdl.startswith("file"):
-                # corrijo ubicación del servidor (localhost:9050 en el WSDL)
-                location = self.wsdl[:-5]
-                if "IWebServiceService" in self.client.services:
-                    ws = self.client.services["IWebServiceService"]  # version 1
-                else:
-                    ws = self.client.services["IWebService"]  # version 2
-                ws["ports"]["IWebServicePort"]["location"] = location
+        # Mantenemos compatibilidad con el decorador de utils.py
+        self.client.xml_request = "" # Placeholder
+        self.client.xml_response = "" # Placeholder
+        # Usamos un proxy para que el decorador pueda acceder a xml_request y xml_response
+        self._zeep_client = self.client # Guardamos el cliente real
+        self.client = ZeepHistoryProxy(self.history)
 
-            # Establecer credenciales de seguridad:
-            self.client["wsse:Security"] = {
-                "wsse:UsernameToken": {
-                    "wsse:Username": self.Username,
-                    "wsse:Password": self.Password,
-                }
-            }
-        return ok
+        return True
 
     @inicializar_y_capturar_excepciones
     def SendMedicamentos(
@@ -305,13 +338,13 @@ class TrazaMed(BaseWS):
             "telefono": telefono,
             "nro_asociado": nro_asociado,
         }
-        res = self.client.sendMedicamentos(
+        res = self._zeep_client.service.sendMedicamentos(
             arg0=params,
             arg1=usuario,
             arg2=password,
         )
 
-        ret = res["return"]
+        ret = serialize_object(res)
 
         self.CodigoTransaccion = ret["codigoTransaccion"]
         self.__analizar_errores(ret)
@@ -388,13 +421,13 @@ class TrazaMed(BaseWS):
             "nro_asociado": nro_asociado,
             "cantidad": cantidad,
         }
-        res = self.client.sendMedicamentosFraccion(
+        res = self._zeep_client.service.sendMedicamentosFraccion(
             arg0=params,
             arg1=usuario,
             arg2=password,
         )
 
-        ret = res["return"]
+        ret = serialize_object(res)
 
         self.CodigoTransaccion = ret["codigoTransaccion"]
         self.__analizar_errores(ret)
@@ -471,13 +504,13 @@ class TrazaMed(BaseWS):
             "telefono": telefono,
             "nro_asociado": nro_asociado,
         }
-        res = self.client.sendMedicamentosDHSerie(
+        res = self._zeep_client.service.sendMedicamentosDHSerie(
             arg0=params,
             arg1=usuario,
             arg2=password,
         )
 
-        ret = res["return"]
+        ret = serialize_object(res)
 
         self.CodigoTransaccion = ret["codigoTransaccion"]
         self.__analizar_errores(ret)
@@ -487,13 +520,13 @@ class TrazaMed(BaseWS):
     @inicializar_y_capturar_excepciones
     def SendCancelacTransacc(self, usuario, password, codigo_transaccion):
         "Realiza la cancelación de una transacción"
-        res = self.client.sendCancelacTransacc(
+        res = self._zeep_client.service.sendCancelacTransacc(
             arg0=codigo_transaccion,
             arg1=usuario,
             arg2=password,
         )
 
-        ret = res["return"]
+        ret = serialize_object(res)
 
         self.CodigoTransaccion = ret.get("codigoTransaccion")
         self.__analizar_errores(ret)
@@ -510,14 +543,14 @@ class TrazaMed(BaseWS):
         numero_serial=None,
     ):
         "Realiza la cancelación parcial de una transacción"
-        res = self.client.sendCancelacTransaccParcial(
+        res = self._zeep_client.service.sendCancelacTransaccParcial(
             arg0=codigo_transaccion,
             arg1=usuario,
             arg2=password,
             arg3=gtin_medicamento,
             arg4=numero_serial,
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         self.CodigoTransaccion = ret.get("codigoTransaccion")
         self.__analizar_errores(ret)
         return True
@@ -525,12 +558,12 @@ class TrazaMed(BaseWS):
     @inicializar_y_capturar_excepciones
     def SendConfirmaTransacc(self, usuario, password, p_ids_transac, f_operacion):
         "Confirma la recepción de un medicamento"
-        res = self.client.sendConfirmaTransacc(
+        res = self._zeep_client.service.sendConfirmaTransacc(
             arg0=usuario,
             arg1=password,
             arg2={"p_ids_transac": p_ids_transac, "f_operacion": f_operacion},
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         self.CodigoTransaccion = ret.get("id_transac_asociada")
         self.__analizar_errores(ret)
         return True
@@ -538,12 +571,12 @@ class TrazaMed(BaseWS):
     @inicializar_y_capturar_excepciones
     def SendAlertaTransacc(self, usuario, password, p_ids_transac_ws):
         "Alerta un medicamento, acción contraria a confirmar la transacción."
-        res = self.client.sendAlertaTransacc(
+        res = self._zeep_client.service.sendAlertaTransacc(
             arg0=usuario,
             arg1=password,
             arg2=p_ids_transac_ws,
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         self.CodigoTransaccion = ret.get("id_transac_asociada")
         self.__analizar_errores(ret)
         return True
@@ -611,10 +644,10 @@ class TrazaMed(BaseWS):
             kwargs["arg18"] = numero_serial
 
         # llamo al webservice
-        res = self.client.getTransaccionesNoConfirmadas(
+        res = self._zeep_client.service.getTransaccionesNoConfirmadas(
             arg0=usuario, arg1=password, **kwargs
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         if ret:
             self.__analizar_errores(ret)
             self.CantPaginas = ret.get("cantPaginas")
@@ -628,7 +661,13 @@ class TrazaMed(BaseWS):
 
         if self.TransaccionPlainWS:
             # extraigo el primer item
-            self.params_out = self.TransaccionPlainWS.pop(0)
+            it = self.TransaccionPlainWS.pop(0)
+            # Normalizar claves (pysimplesoap solía usar guiones bajos)
+            self.params_out = {}
+            for k, v in list(it.items()):
+                self.params_out[k] = v
+                if not k.startswith("_"):
+                    self.params_out["_" + k] = v
             return True
         else:
             # limpio los parámetros
@@ -699,10 +738,10 @@ class TrazaMed(BaseWS):
             kwargs["arg15"] = n_factura
 
         # llamo al webservice
-        res = self.client.getEnviosPropiosAlertados(
+        res = self._zeep_client.service.getEnviosPropiosAlertados(
             arg0=usuario, arg1=password, **kwargs
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         if ret:
             self.__analizar_errores(ret)
             self.CantPaginas = ret.get("cantPaginas")
@@ -767,8 +806,8 @@ class TrazaMed(BaseWS):
             kwargs["arg16"] = nro_pag
 
         # llamo al webservice
-        res = self.client.getTransaccionesWS(arg0=usuario, arg1=password, **kwargs)
-        ret = res["return"]
+        res = self._zeep_client.service.getTransaccionesWS(arg0=usuario, arg1=password, **kwargs)
+        ret = serialize_object(res)
         if ret:
             self.__analizar_errores(ret)
             self.CantPaginas = ret.get("cantPaginas")
@@ -800,10 +839,10 @@ class TrazaMed(BaseWS):
             kwargs["arg5"] = id_monodroga
 
         # llamo al webservice
-        res = self.client.getCatalogoElectronicoByGTIN(
+        res = self._zeep_client.service.getCatalogoElectronicoByGTIN(
             arg0=usuario, arg1=password, **kwargs
         )
-        ret = res["return"]
+        ret = serialize_object(res)
         if ret:
             self.__analizar_errores(ret)
             self.CantPaginas = ret.get("cantPaginas")
@@ -854,8 +893,8 @@ class TrazaMed(BaseWS):
             kwargs["arg10"] = cant_reg
 
         # llamo al webservice
-        res = self.client.getConsultaStock(arg0=usuario, arg1=password, **kwargs)
-        ret = res["return"]
+        res = self._zeep_client.service.getConsultaStock(arg0=usuario, arg1=password, **kwargs)
+        ret = serialize_object(res)
         if ret:
             self.__analizar_errores(ret)
             self.CantPaginas = ret.get("cantPaginas")
